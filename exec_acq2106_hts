@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+echo "$@"
+
+arg=("${@:3}")
+
+cd $1/acq400_hapi; . ./setpath
+
+echo "${arg[@]}"
+
+python3 $2 --datahandler='./scripts/run-stream-ramdisk {} {} {}' "${arg[@]}"

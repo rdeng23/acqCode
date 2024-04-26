@@ -1,0 +1,11 @@
+#!/bin/bash
+
+KEY=${KEY:-100000}
+
+if [ "x$1" == "" ] ; then
+	echo usage analyse-log LOGFILE
+	exit 1
+fi
+
+echo Shot Count  $(grep $KEY\] $1 | wc -l)
+grep $KEY\] $1 | sort | uniq -c 

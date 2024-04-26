@@ -1,0 +1,89 @@
+#!/bin/bash
+# stream-dual DEV1 DEV2  : stream from two devices
+
+cleanup() {
+	echo cleanup
+	kill -9 -- -$$
+}
+
+case $# in
+2)
+	export DATECODE=$(date +%y%m%d%H%M)
+	$0 $1 & 
+	$0 $2 &
+	trap "cleanup" SIGINT SIGTERM
+	wait;wait; exit 0;;
+1)
+	;;
+*)
+	echo usages $0  DEV1 [DEV2]
+esac
+	
+DN=${1} ; shift
+PATH=$PATH:/usr/local/bin
+SITES="${SITES:-1,2,3}"
+MASK=${MASK:-1:96}
+MAXSAMPLES=${MAXSAMPLES:-200000000}
+
+case ${SITES} in
+1,2,3,4,5,6)
+	SITEDEF="1=ABCDl 2=ABCD 3=ABCD 4=ABCD 5=ABCD 6=ABCD";;
+1,2,3,4,5)
+	SITEDEF="1=ABCDl 2=ABCD 3=ABCD 4=ABCD 5=ABCD";;
+1,2,3,4)
+	SITEDEF="1=ABCDl 2=ABCD 3=ABCD 4=ABCD";;
+1,2,3)
+	SITEDEF="1=ABCDl 2=ABCD 3=ABCD";;
+2)
+	SITEDEF="1=ABCDl 2=ABCD";;
+1)
+	SITEDEF="1=ABCDl";;
+*)
+	echo ERROR: BAD SITES $SITES;;
+esac
+
+
+cat /dev/rtm-t.${DN}.ctrl/z_ident
+IDENT0=$(cat /dev/rtm-t.${DN}.ctrl/acq_ident)
+IDENT=$(cat /dev/rtm-t.${DN}.ctrl/acq_ident)
+
+while [ "$IDENT0" != "$IDENT" ]; do
+	echo "ident mismatch 0:$IDENT0 1:$IDENT1"
+	IDENT0=$IDENT
+	IDENT=$(cat /dev/rtm-t.${DN}.ctrl/acq_ident)
+done
+echo IDENT $IDENT
+
+IDC=$IDENT
+if [ "x$DATECODE" != "x" ]; then
+	IDC=$IDENT-$DATECODE
+fi
+
+echo DN $DN SITES $SITES IDENT $IDENT
+
+echo checking aurora is up ..
+grep +LANE_UP /dev/rtm-t.$DN.ctrl/aurora
+if [ $? -ne 0 ];then
+	echo aurora lane NOT up, quit
+	exit 1
+fi
+echo stream raw to /mnt/afhba.$DN cooked to /data/$IDC.dat
+mkdir -p /mnt/afhba.$DN
+rm -Rf /mnt/afhba.$DN/*
+
+if [ "$IDC" != "$IDENT" ]; then
+	# softlink needed for ATP data
+	rm -f /data/$IDENT.dat
+	ln -s /data/$IDC.dat /data/$IDENT.dat
+fi
+# --filenames
+# --mask=
+# --maxsamples=
+# CONCAT=2 combine 1+2 buffers for modulo 96 data
+RTM_DEVNUM=$DN RECYCLE=10 OUTROOT=/mnt/afhba.$DN CONCAT=2 \
+	./STREAM/rtm-t-stream-disk 2>afhba.$DN.log | \
+	acq435_tschan --filenames --maxsamples=$MAXSAMPLES \
+	--mask=$MASK \
+	--outfile=/data/$IDC.dat \
+	$SITEDEF 2>&1 >afhba.$DN.log
+

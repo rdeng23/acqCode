@@ -1,0 +1,9 @@
+*.pyc
+*.dat
+
+
+user_apps/acq400/waves/
+
+user_apps/acq400/ROOT/
+
+user_apps/acq400/acq1001_329/

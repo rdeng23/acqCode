@@ -1,0 +1,69 @@
+#!/usr/bin/env python
+
+"""
+Configures multiple UUTS with ACQ435 for continuous stream with broadcast trigger enabled
+"""
+
+
+import argparse
+import acq400_hapi
+import time
+
+
+def stop(args, uuts):
+    for uut in uuts:
+        uut.s0.CONTINUOUS = '0'
+
+def start(args, uuts):
+    for uut in uuts:
+        uut.s0.CONTINUOUS = '0'                    # STOP any previous capture
+    for uut in uuts:
+        while uut.s0.CONTINUOUS_STATE.split(" ")[1] != "IDLE":
+            time.sleep(1)
+        if args.verbose:
+            print("{} has stopped".format(uut.uut))
+
+    for uut in uuts:
+        uut.s0.set_abort = '1'
+        uut.s1.ACQ43X_SAMPLE_RATE = args.acq435SR
+
+        uut.s0.SIG_SRC_TRG_1 = 'HOSTA'             # broadcast trg on HOSTA
+        uut.s0.SIG_SYNC_OUT_TRG = 'd1'             # connect to output HDMI
+        uut.s0.SIG_EVENT_SRC_1 = 'TRG'
+        uut.s0.SIG_FP_GPIO = 'EVT1'                # connect to event, and FP
+
+        uut.s0.spad= '1,16,1'                      # 16 element SPAD rounds to 64b
+        uut.s0.spad1_us = '1'                      # SPAD[1] has usecs count
+        uut.cA.spad = '1'
+        uut.cA.aggregator = 'sites=1'
+        uut.s0.run0 = '1'
+
+    for uut in uuts:
+        uut.s0.CONTINUOUS = '1'                    # ARM the capture.
+    for uut in uuts:
+        while uut.s0.CONTINUOUS_STATE.split(" ")[1] != "ARM":
+            time.sleep(1)
+        if args.verbose:
+            print("{} is ARMED and waiting for trigger".format(uut.uut))
+
+
+def config(args):
+    uuts = [ acq400_hapi.Acq2106(u) for u in args.uuts ]
+
+    if args.stop:
+        stop(args, uuts)
+    else:
+        start(args, uuts)
+
+
+def run_main():
+    parser = argparse.ArgumentParser(description='acqproc config freerunning acq435')
+    acq400_hapi.Acq400UI.add_args(parser, transient=False, uuts=True)
+    parser.add_argument('--verbose', default=0, type=int, help='verbose')
+    parser.add_argument('--acq435SR', default=49999, type=int, help='set acq435 SR')
+    parser.add_argument('--stop', default=0, type=int, help='stop a previous capture')
+    config(parser.parse_args())
+
+if __name__ == '__main__':
+    run_main()
+

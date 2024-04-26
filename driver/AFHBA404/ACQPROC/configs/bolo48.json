@@ -1,0 +1,18 @@
+{
+    "AFHBA": {
+        "//" : "bolo48.json .. example 48channel bolo setup"
+        "UUT": [
+                {
+	           "name" : "acq2106_123",  
+                   "type": "bolo",
+                   "VI" : {
+			"//": "6 * 8 * 3 longs"
+                        "AI32" : 144,  
+                        "SP32" : 16
+                   }
+                }
+        ]
+    }
+}
+
+

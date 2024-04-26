@@ -1,0 +1,238 @@
+#!/bin/bash
+# high throughput streaming test harness
+# autodetects two ACQ2106 UUT's
+# default: wait-trigger wait-ctrlC
+# command line options
+# no-wait : do not wait for completion
+# no-wait-trigger : do not wait for trigger command
+# no-trigger : do not trigger
+# trigger-now : send common trigger only
+# cleanup : stop capture
+#
+# Use Case 1: ./scripts/go-dual (no args)
+#       configure two UUT
+#	prompt user for Trigger
+#       prompt user for completion (CTRL-C)
+# Use Case 2:
+#	./scripts/go-dual no-wait no-wait-trigger
+#       	configure two UUT, trigger and exit
+# Use Case 2.1: 
+#	./scripts/go-dual cleanup
+#		stop capture previously set in 2)
+
+
+[ -d scripts ] && cd scripts
+
+# basic setter/getters
+
+set_sys() {
+	dev=$1; shift
+        knob=$1;shift
+        logger -t set_sys ${dev}/${knob} $*
+        echo $* >${dev}/${knob}
+}
+
+get_sys() {
+	dev=$1;shift
+        knob=$1
+        RB=$(cat ${dev}/${knob})
+        logger -t get_sys ${dev}/${knob} $RB
+        echo $RB
+}
+
+remote_cmd() {
+	remip=$1; shift
+        site=$1;shift
+        let port="4220+$site"
+        logger -t rem_cmd $remip $port $*
+        echo $* | nc $remip $port
+}
+
+# validate system
+
+get_port() {
+	dev=$1
+	knob=/dev/rtm-t.$dev.ctrl/acq_port
+	if [ -e $knob ]; then
+		echo $(cat $knob)
+	else
+		echo 1>&2 "ERROR file $knob not found"
+		exit 1
+	fi
+}
+
+get_ident() {
+	dev=$1
+	knob=/dev/rtm-t.$dev.ctrl/acq_ident
+	if [ -e $knob ]; then
+		echo $(cat $knob)
+	else
+		echo 1>&2 "ERROR file $knob not found"
+		exit 1
+	fi
+}
+
+pingtest() {
+	ping -c 1 $1 >/dev/null
+	if [ $? -ne 0 ]; then
+		echo ERROR: failed to ping $1
+		exit 1
+	else
+		echo PING $1 OK
+	fi
+}
+
+# issue BLANK if no host. That causes all [ $HOSTx ] tests to skip
+
+host_good() {
+	hx=${1#acq2106_*}
+	[ $hx != $1 ] && echo $1
+}
+
+HOST1=$(get_ident 0)
+HOST2=$(get_ident 1)
+PORT1=$(get_port 0)
+PORT2=$(get_port 1)
+
+HOST1=$(host_good $HOST1)
+HOST2=$(host_good $HOST2)
+
+
+
+if [ $HOST1 ] && [ $HOST2]; then
+	echo HOST1:$HOST1 HOST2:HOST2 PORT1:$PORT1 PORT2:$PORT2 OK1:$OK1
+	if [ "$PORT1" != "$PORT2" ]; then
+		echo "ERROR: connected to different COMM ports at ACQ2106, please swap"
+		exit 1
+	else
+		PORT=$PORT1
+		if [ "$PORT" = "A" ]; then
+			echo "Connected to $PORT1 on both UUT : OK"
+		else
+			echo "ERROR: Please use PORT A for control"	
+			exit 1
+		fi
+	fi
+else
+	echo "using single host.."
+fi
+[ $HOST1 ] && echo using $HOST1
+[ $HOST2 ] && echo using $HOST2
+	
+
+[ $HOST1 ] && pingtest $HOST1
+[ $HOST2 ] && pingtest $HOST2
+
+SITES=${SITES:-1,2,3}
+
+SIMULATE=${SIMULATE:-0}
+SPAD=${SPAD:-0}
+
+# site definitions SC: system controller, CX: commsA, AI: AI
+SC=0
+CA=13
+CB=12
+# master AI
+AI=1
+
+CA_SITES=${SITES}
+CB_SITES=${SITES}
+
+init_comms() {
+	ip=$1
+	cx=$2
+	sites=$3
+        remote_cmd $ip $cx aggregator sites=$sites
+        remote_cmd $ip $cx spad=${SPAD}
+}
+
+init_acq2106A() {
+	ip=$1
+	init_comms $ip $CA $CA_SITES
+	init_comms $ip $CB $CB_SITES
+
+	remote_cmd $ip $AI simulate=$SIMULATE
+	remote_cmd $ip $AI bitslice_frame=1
+	remote_cmd $ip $SC spad=0,0,0
+	remote_cmd $ip $SC SIG:SRC:CLK:0=COMM_$PORT
+	remote_cmd $ip $SC SIG:SRC:TRG:1=HOST$PORT
+	remote_cmd $ip $SC run0 $SITES
+	remote_cmd $ip $SC decimate=4
+}
+
+start_stream() {
+	ip=$1
+	remote_cmd $ip $SC streamtonowhered start
+}
+
+
+cleanup() {
+	remote_cmd $1 $SC streamtonowhered stop
+}
+
+cleanup2() {
+	[ $HOST1 ] && cleanup $HOST1
+	[ $HOST2 ] && cleanup $HOST2
+}
+
+trigger() {
+	echo trigger
+	echo 1 > /dev/rtm-t.0.ctrl/com_trg
+}
+
+mantrg() {
+	echo "Enter T to trigger"
+	read TRG
+	if [ "$TRG" = "T" ]; then
+		trigger
+	fi
+}
+
+# hack: emergency stop
+if [ "$1" = "STOP" ]; then
+	cleanup2
+	exit 0
+fi
+
+
+# regular code runs from here
+
+NOWAITTRG=${NOWAITTRG:-0}
+NOWAIT=${NOWAIT:-0}
+CLEANUP=${CLEANUP:-0}
+NOTRIGGER=${NOTRIGGER:-0}
+
+for arg in $*; do
+	case $arg in
+	no-wait)	 NOWAIT=1;;
+	no-wait-trigger) NOWAITTRG=1;;
+	no-trigger)	 NOTRIGGER=1;;
+	trigger-now)	 trigger; exit 0;;
+	cleanup)	 cleanup2; exit 0;;
+	esac
+done
+
+
+[ $HOST1 ] && init_acq2106A $HOST1
+[ $HOST2 ] && init_acq2106A $HOST2
+
+[ $HOST1 ] && start_stream $HOST1
+[ $HOST2 ] && start_stream $HOST2
+sleep 2
+
+if [ $NOTRIGGER -eq 0 ]; then
+	if [ $NOWAITTRG -ne 0 ]; then
+		trigger
+	else
+		mantrg
+	fi
+fi
+
+if [ $NOWAIT -eq 0 ]; then
+	echo CTRL-C to quit
+	trap "cleanup2" SIGINT SIGTERM
+
+	sleep 99999
+fi
+
+

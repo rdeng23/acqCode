@@ -1,0 +1,134 @@
+import os.path
+import struct
+import shutil
+import subprocess
+import numpy as np
+
+TESTFROMFILE = "D:\\test\\0.00"
+TESTTOFILE = "D:\\test\\result.bin"
+TEST_DAS_ADDBASE = "\\DESKTOP-9C03L1M\\2mdas";
+LOCAL_FILE_BASE = "D:\\LDATA"
+CHANNEL_COUNT_2106 = 192
+
+
+# 将原始数据整理成需要的格式的数据。
+# samplePerChannel = 每个通道有多少个点。每个点是2Byte，所以这个地方的结果是时间x采样率
+def reAssembleFile(fromFilePath, channelCount, acqTime, fireNum, output_path, das_addbase):
+    samplePerChannel = acqTime * 1_000_000
+    dataOrignal = np.fromfile(fromFilePath, dtype=np.uint16, count=channelCount * samplePerChannel, offset=0)
+    data2DByTick = dataOrignal.reshape(samplePerChannel, channelCount)
+    data2DByTickFirst5Slots = data2DByTick[:, :160]
+    dataAssemble = data2DByTickFirst5Slots.flatten(order="F")
+    dataAssemble += 32767
+    out_dir = genLocalFileFolder(fireNum, output_path)
+    das_dir = genLocalFileFolder(fireNum, das_addbase)
+    localPath = os.path.join(out_dir, "DATA", str(fireNum).zfill(5) + "XUV.DAT")
+    dasPath = os.path.join(das_dir, "DATA", str(fireNum).zfill(5) + "XUV.DAT")
+    # 写DAT文件
+    dataAssemble.tofile(localPath)
+    dataAssemble.tofile(dasPath)
+    # 写INF文件
+    infData = genINF(fireNum, 160, acqTime)
+    infPath = os.path.join(out_dir, "INF", str(fireNum).zfill(5) + "XUV.INF")
+    with open(infPath, "wb") as fp:
+        fp.write(infData)
+    infDasPath = os.path.join(das_dir, "INF", str(fireNum).zfill(5) + "XUV.INF")
+    with open(infDasPath, "wb") as fp2:
+        fp2.write(infData)
+    shutil.rmtree(fromFilePath[0:10])
+    subprocess.call(['sync'])
+    with open('/proc/sys/vm/drop_caches','w') as fp3:
+    	fp3.write(str(int(1)) +'\n')
+    subprocess.call(['free','-m'])
+
+
+# 根据炮号指定当前文件的存放路径
+def genLocalFileFolder(fireNum, output_path):
+    baseFolderNum = fireNum // 200 * 200
+    # shotPath = LOCAL_FILE_BASE + "\\" + str(baseFolderNum)
+    shotPath = os.path.join(output_path, str(baseFolderNum).zfill(5))
+    if not (os.path.exists(shotPath)):
+        os.makedirs(os.path.join(shotPath, "DATA"))
+        os.makedirs(os.path.join(shotPath, "INF"))
+    return shotPath
+
+
+# 生成INF文件
+def genINF(fireNum, channelCount, acqTime):
+    # channelCount 固定等于160个通道
+    channelNames = generateChannelName()
+    infAll = b''
+    for i in range(160):
+        infOneChannel = b''
+        fileType = "swip_das  "  # 0 文件类型，固定为"swip_das"，长度为10
+        channelId = i  # 10 通道id，uint
+        channelName = channelNames[i]  # 12 通道名称，len=12
+        addr = acqTime * 1_000_000 * 2 * i  # 24 数据指针。按通道顺序排列，所以和采样时间相关。1秒下1通道的指针是1s*1M/s*2 = 2MB开始
+        sampleRate = 1_000_000  # 28 采样率，写死为1M
+        dataLen = acqTime * 1_000_000  # 32 采集长度，单位是点数（不是byte数，不乘以2）
+        post = dataLen  # 36 触发后采集长度。这里没有预触发。所以就等于len
+        maxDat = 65535  # 40 满量程时AD转换值
+        lowRange = -10  # 42 量程下限
+        highRange = 10  # 46 量程上限
+        factor = 1  # 50 factor = 1
+        offset = 0  # 54 offset = 0
+        unit = "V"  # 58 单位
+        dly = 0  # 66 采数延迟(ms)
+        attribDt = 1  # 70 数据属性
+        datWth = 2  # 72 数据字宽度
+        spareI1 = 0
+        spareI2 = 0
+        spareI3 = 0
+        spareF1 = 0
+        spareF2 = 0
+        spareC1 = " "
+        spareC2 = " "
+        spareC3 = " "
+
+        infOneChannel += fileType.encode()
+        infOneChannel += channelId.to_bytes(2, byteorder="little")
+        infOneChannel += channelName.encode()
+        infOneChannel += addr.to_bytes(4, byteorder="little")
+        infOneChannel += struct.pack("f", sampleRate)
+        infOneChannel += dataLen.to_bytes(4, byteorder="little")
+        infOneChannel += post.to_bytes(4, byteorder="little")
+        infOneChannel += maxDat.to_bytes(2, byteorder="little")
+        infOneChannel += struct.pack("f", lowRange)
+        infOneChannel += struct.pack("f", highRange)
+        infOneChannel += struct.pack("f", factor)
+        infOneChannel += struct.pack("f", offset)
+        infOneChannel += unit.ljust(8, " ").encode()
+        infOneChannel += struct.pack("!f", dly)
+        infOneChannel += attribDt.to_bytes(2, byteorder="little")
+        infOneChannel += datWth.to_bytes(2, byteorder="little")
+        infOneChannel += spareI1.to_bytes(2, byteorder="little")
+        infOneChannel += spareI2.to_bytes(2, byteorder="little")
+        infOneChannel += spareI3.to_bytes(2, byteorder="little")
+        infOneChannel += struct.pack("f", spareF1)
+        infOneChannel += struct.pack("f", spareF2)
+        infOneChannel += spareC1.ljust(8, " ").encode()
+        infOneChannel += spareC2.ljust(16, " ").encode()
+        infOneChannel += spareC3.ljust(10, " ").encode()
+        infAll += infOneChannel
+    return infAll
+
+
+# 客户还没给，暂时先随便
+def generateChannelId():
+    a = []
+    for i in range(160):
+        a.append(i)
+    return a
+
+
+def generateChannelName():
+    nameList = []
+    for group in range(10):
+        for id in range(16):
+            name = "DAXUV" + str(group + 1) + "_" + str(id + 1).rjust(2, "0")
+            nameList.append(name.ljust(12, " "))
+    return nameList
+
+
+if __name__ == '__main__':
+    reAssembleFile(TESTFROMFILE, CHANNEL_COUNT_2106, 2, 99221, LOCAL_FILE_BASE)

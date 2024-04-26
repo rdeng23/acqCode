@@ -1,0 +1,110 @@
+#!/bin/bash 
+# llc-test-harness-intclk-AI1-AO4-zcopy 
+# AI+AO llc with zerocopy on one fiber. Basic LLC test
+
+[ -d scripts ] && cd scripts
+
+# MUST set remote ip-address
+REMIP=${1:-acq2106_003}
+INTCLKDIV=${INTCLKDIV:-100}		# 10M/100 = 100k
+EXTCLKDIV=${EXTCLKDIV:-10}		# 1M/10 = 100k
+LLC_CLK=${LLC_CLK:-ext}
+STREAMPID=0
+DO=${DO:-6}
+
+
+source afhba-common
+# site definitions SC: system controller, CB: commsB, AI: AI, AO : AO
+SC=0
+CA=13
+CB=12
+AI=1
+AO=5
+
+AG_SITES=${AG_SITES:-1,2,3,4}
+DS_SITES=$AO
+
+if [ $DO -ne 0 ]; then
+	NSPAD=15
+	AG_SITES=$AG_SITES,$DO
+	DS_SITES=$DS_SITES,$DO
+else
+	NSPAD=16
+fi
+CA_SITES=$AG_SITES
+CB_SITES=$AG_SITES
+
+init_comms() {	
+	cx=$1
+	sites=$2
+	
+#	remote_cmd $cx spad=0
+	remote_cmd $cx aggregator sites=$sites
+}
+
+
+init_2106() {
+	[ $DO -ne 0 ] && remote_cmd $DO mode=2
+	if [ "$LLC_TRG" = "ext" ]; then
+		remote_cmd $AI trg=1,0,1
+		[ $AO -ne 0 ] && remote_cmd $AO trg=1,0,1
+		[ $DO -ne 0 ] && remote_cmd $DO trg=1,0,1
+	else
+		remote_cmd $AI trg=1,1,1
+		[ $AO -ne 0 ] && remote_cmd $AO trg=1,1,1
+		[ $DO -ne 0 ] && remote_cmd $DO trg=1,1,1
+	fi
+	if [ "$LLC_CLK" = "ext" ]; then
+		remote_cmd $SC acq2106_set_ext_clk=$EXTCLKDIV
+		echo setting external clock / $EXTCLKDIV
+	else
+		remote_cmd $SC acq2106_set_int_clk=$INTCLKDIV
+		echo setting internal clock / $INTCLKDIV
+	fi
+	if [ $DO -ne 0 ]; then
+	        remote_cmd $SC distributor sites=$DS_SITES comms=1 pad=15 off
+	        remote_cmd $SC distributor sites=$DS_SITES comms=1 pad=15 on
+	else
+	        remote_cmd $SC distributor sites=$DS_SITES comms=1  off
+	        remote_cmd $SC distributor sites=$DS_SITES comms=1  on
+	fi   
+	remote_cmd $AO lotide 256
+# slave AO off site 2 outclock
+
+	for ss in $AO $DO
+	do
+		if [ $ss -ne 0 ]; then
+			remote_cmd $ss clk=1,2,1
+			remote_cmd $ss clkdiv=1 
+		fi
+	done
+
+	remote_cmd $SC spad=1,$NSPAD,0	
+	
+	remote_cmd $SC run0 $AG_SITES
+	remote_cmd $CB spad 1
+	
+	init_comms $CA $CA_SITES
+	init_comms $CB $CB_SITES
+	
+}
+
+start_stream() {
+	remote_cmd $SC streamtonowhered start
+}
+
+
+cleanup() {
+#	kill ${STREAMPID}
+	remote_cmd $SC streamtonowhered stop
+	remote_cmd $SC distributor sites=$DS_SITES off
+}
+
+init_2106
+start_stream
+echo now view data perhaps using ./mapsample
+echo CTRL-C to quit
+trap "cleanup" SIGINT SIGTERM
+
+sleep 99999
+

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+echo "$@"
+
+arg=("${@:3}")
+
+cd $1/AFHBA404
+
+./scripts/loadNIRQ

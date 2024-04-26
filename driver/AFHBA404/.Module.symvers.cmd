@@ -1,0 +1,1 @@
+cmd_/usr/local/large_dram_data_capture_fat/driver/AFHBA404/Module.symvers := sed 's/\.ko$$/\.o/' /usr/local/large_dram_data_capture_fat/driver/AFHBA404/modules.order | scripts/mod/modpost -m -a  -o /usr/local/large_dram_data_capture_fat/driver/AFHBA404/Module.symvers -e -i Module.symvers   -w -T -
